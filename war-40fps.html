@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WAR//60 - Frontline Survival</title>
+  <style>
+    :root {
+      --ink: #e9edf0;
+      --muted: #92a0a7;
+      --red: #ff4d3d;
+      --yellow: #f4c95d;
+      --panel: rgba(10, 17, 20, .86);
+      --line: rgba(205, 220, 223, .16);
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; background: #071013; color: var(--ink); font-family: Georgia, 'Times New Roman', serif; }
+    body { display: grid; place-items: center; overflow: hidden; }
+    .shell { position: relative; width: min(1180px, 100vw); height: min(760px, 100vh); overflow: hidden; background: #0a1618; box-shadow: 0 24px 100px rgba(0,0,0,.5); }
+    canvas { display: block; width: 100%; height: 100%; cursor: crosshair; background: #102023; }
+    .topbar { position: absolute; inset: 0 0 auto; display: flex; justify-content: space-between; align-items: flex-start; padding: 22px 26px; pointer-events: none; text-transform: uppercase; letter-spacing: .12em; }
+    .brand { font: 700 14px/1.1 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--yellow); }
+    .brand strong { display: block; margin-top: 5px; color: var(--ink); font-size: 23px; letter-spacing: .04em; }
+    .stats { display: flex; gap: 22px; text-align: right; font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); }
+    .stats b { display: block; margin-top: 5px; color: var(--ink); font-size: 20px; }
+    .notice { position: absolute; left: 26px; bottom: 25px; color: var(--muted); font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .05em; pointer-events: none; }
+    .notice span { color: var(--yellow); }
+    .screen { position: absolute; inset: 0; display: grid; place-items: center; padding: 24px; background: radial-gradient(circle at center, rgba(8,20,22,.55), rgba(3,9,11,.9)); }
+    .panel { width: min(490px, 100%); padding: 38px 40px; border: 1px solid var(--line); border-top: 3px solid var(--red); background: var(--panel); box-shadow: 0 20px 50px rgba(0,0,0,.38); }
+    .kicker { color: var(--red); font: 700 11px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .2em; }
+    h1 { margin: 12px 0 8px; font-size: clamp(42px, 7vw, 74px); line-height: .86; letter-spacing: -.05em; }
+    .panel p { color: #b6c2c5; line-height: 1.55; margin: 0 0 25px; }
+    .controls { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 18px; margin: 20px 0 28px; color: var(--muted); font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .controls b { color: var(--yellow); font-weight: 400; }
+    button { border: 0; padding: 14px 18px; background: var(--red); color: #160706; font: 700 12px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .12em; cursor: pointer; }
+    button:hover { background: #ff766a; }
+    .hidden { display: none; }
+    @media (max-width: 600px) { .topbar { padding: 16px; } .stats { gap: 10px; } .stats b { font-size: 16px; } .notice { left: 16px; bottom: 16px; } .panel { padding: 28px 24px; } }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <canvas id="game" aria-label="Game WAR 60"></canvas>
+    <div class="topbar">
+      <div class="brand">FIELD REPORT<strong>WAR//60</strong></div>
+      <div class="stats"><div>WAVE<b id="wave">01</b></div><div>SCORE<b id="score">00000</b></div><div>HP<b id="hp">100</b></div></div>
+    </div>
+    <div class="notice">STATUS: <span id="status">AWAITING DEPLOYMENT</span> &nbsp;|&nbsp; TARGET: <span>60 FPS</span></div>
+    <section class="screen" id="menu">
+      <div class="panel">
+        <div class="kicker">FRONTLINE SURVIVAL / SECTOR 07</div>
+        <h1>HOLD<br>THE LINE</h1>
+        <p>Send the hostile advance back into the fog. Every wave gets faster. Your rifle never jams.</p>
+        <div class="controls"><div><b>W A S D</b> move</div><div><b>MOUSE</b> aim</div><div><b>CLICK</b> fire</div><div><b>R</b> redeploy</div></div>
+        <button id="start">DEPLOY NOW</button>
+      </div>
+    </section>
+  </main>
+  <script>
+    (() => {
+      const canvas = document.getElementById('game');
+      const ctx = canvas.getContext('2d');
+      const menu = document.getElementById('menu');
+      const startButton = document.getElementById('start');
+      const waveEl = document.getElementById('wave');
+      const scoreEl = document.getElementById('score');
+      const hpEl = document.getElementById('hp');
+      const statusEl = document.getElementById('status');
+      const keys = new Set();
+      const mouse = { x: 0, y: 0, down: false };
+      const state = { running: false, over: false, score: 0, wave: 1, hp: 100, spawnTimer: 0, waveTimer: 0, shake: 0 };
+      const player = { x: 0, y: 0, speed: 220, cooldown: 0, radius: 13 };
+      let bullets = [], enemies = [], particles = [], lastTime = 0, accumulator = 0;
+      const STEP = 1 / 60;
+
+      function resize() {
+        const dpr = Math.min(devicePixelRatio || 1, 2);
+        canvas.width = Math.floor(canvas.clientWidth * dpr);
+        canvas.height = Math.floor(canvas.clientHeight * dpr);
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        if (!player.x) { player.x = canvas.clientWidth / 2; player.y = canvas.clientHeight / 2; }
+      }
+      function reset() {
+        state.running = true; state.over = false; state.score = 0; state.wave = 1; state.hp = 100; state.spawnTimer = 0; state.waveTimer = 0; state.shake = 0;
+        player.x = canvas.clientWidth / 2; player.y = canvas.clientHeight / 2; bullets = []; enemies = []; particles = [];
+        menu.classList.add('hidden'); statusEl.textContent = 'ENGAGED'; updateHud();
+      }
+      function updateHud() {
+        waveEl.textContent = String(state.wave).padStart(2, '0'); scoreEl.textContent = String(state.score).padStart(5, '0'); hpEl.textContent = Math.max(0, state.hp); hpEl.style.color = state.hp < 35 ? '#ff4d3d' : '';
+      }
+      function spawnEnemy() {
+        const margin = 45, side = Math.floor(Math.random() * 4);
+        const w = canvas.clientWidth, h = canvas.clientHeight;
+        const x = side === 0 ? -margin : side === 1 ? w + margin : Math.random() * w;
+        const y = side === 2 ? -margin : side === 3 ? h + margin : Math.random() * h;
+        const tough = Math.random() < Math.min(.12 + state.wave * .02, .35);
+        enemies.push({ x, y, r: tough ? 17 : 12, hp: tough ? 3 : 1, speed: (tough ? 32 : 47) + state.wave * 4, hit: 0, tough });
+      }
+      function burst(x, y, color, count) { for (let i = 0; i < count; i++) { const a = Math.random() * Math.PI * 2, s = 25 + Math.random() * 100; particles.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: .25 + Math.random() * .35, color }); } }
+      function shoot() {
+        if (player.cooldown > 0) return;
+        const dx = mouse.x - player.x, dy = mouse.y - player.y, len = Math.hypot(dx, dy) || 1;
+        bullets.push({ x: player.x + dx / len * 18, y: player.y + dy / len * 18, vx: dx / len * 570, vy: dy / len * 570, life: .9 });
+        player.cooldown = .12; burst(player.x + dx / len * 18, player.y + dy / len * 18, '#f4c95d', 2);
+      }
+      function update(dt) {
+        if (!state.running) return;
+        let mx = 0, my = 0; if (keys.has('w')) my--; if (keys.has('s')) my++; if (keys.has('a')) mx--; if (keys.has('d')) mx++;
+        const len = Math.hypot(mx, my) || 1; player.x = Math.max(18, Math.min(canvas.clientWidth - 18, player.x + mx / len * player.speed * dt)); player.y = Math.max(18, Math.min(canvas.clientHeight - 18, player.y + my / len * player.speed * dt));
+        player.cooldown -= dt; if (mouse.down) shoot();
+        state.spawnTimer -= dt; state.waveTimer += dt; if (state.spawnTimer <= 0) { spawnEnemy(); state.spawnTimer = Math.max(.24, 1.05 - state.wave * .06); }
+        if (state.waveTimer > 18) { state.wave++; state.waveTimer = 0; burst(player.x, player.y, '#ff4d3d', 16); updateHud(); }
+        bullets.forEach(b => { b.x += b.vx * dt; b.y += b.vy * dt; b.life -= dt; }); bullets = bullets.filter(b => b.life > 0 && b.x > -30 && b.y > -30 && b.x < canvas.clientWidth + 30 && b.y < canvas.clientHeight + 30);
+        enemies.forEach(e => { const dx = player.x - e.x, dy = player.y - e.y, l = Math.hypot(dx, dy) || 1; e.x += dx / l * e.speed * dt; e.y += dy / l * e.speed * dt; e.hit -= dt; if (l < e.r + player.radius && e.hit <= 0) { state.hp -= e.tough ? 12 : 7; e.hit = .55; state.shake = .18; burst(player.x, player.y, '#ff4d3d', 7); updateHud(); if (state.hp <= 0) gameOver(); } });
+        bullets.forEach(b => enemies.forEach(e => { if (Math.hypot(b.x - e.x, b.y - e.y) < e.r + 4 && b.life > 0 && e.hp > 0) { b.life = 0; e.hp--; e.hit = .1; burst(b.x, b.y, '#f4c95d', 4); if (e.hp <= 0) { state.score += e.tough ? 40 : 10; burst(e.x, e.y, '#ff4d3d', 12); updateHud(); } } }));
+        enemies = enemies.filter(e => e.hp > 0); particles.forEach(p => { p.x += p.vx * dt; p.y += p.vy * dt; p.vx *= .94; p.vy *= .94; p.life -= dt; }); particles = particles.filter(p => p.life > 0); state.shake = Math.max(0, state.shake - dt);
+      }
+      function gameOver() { state.running = false; state.over = true; statusEl.textContent = 'LINE LOST'; startButton.textContent = 'REDEPLOY'; menu.querySelector('h1').innerHTML = 'LINE<br>LOST'; menu.querySelector('p').textContent = `Score akhir ${state.score}. Sektor bertahan selama gelombang ${state.wave}.`; menu.classList.remove('hidden'); }
+      function draw() {
+        const w = canvas.clientWidth, h = canvas.clientHeight, sx = state.shake ? (Math.random() - .5) * 7 : 0, sy = state.shake ? (Math.random() - .5) * 7 : 0;
+        ctx.save(); ctx.translate(sx, sy); ctx.fillStyle = '#102023'; ctx.fillRect(-10, -10, w + 20, h + 20);
+        ctx.strokeStyle = 'rgba(180, 205, 202, .055)'; ctx.lineWidth = 1; for (let x = 0; x < w; x += 42) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke(); } for (let y = 0; y < h; y += 42) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke(); }
+        ctx.strokeStyle = 'rgba(244, 201, 93, .25)'; ctx.setLineDash([4, 9]); ctx.strokeRect(22, 22, w - 44, h - 44); ctx.setLineDash([]);
+        bullets.forEach(b => { ctx.fillStyle = '#f4c95d'; ctx.beginPath(); ctx.arc(b.x, b.y, 3, 0, Math.PI * 2); ctx.fill(); });
+        enemies.forEach(e => { ctx.save(); ctx.translate(e.x, e.y); ctx.rotate(Math.atan2(player.y - e.y, player.x - e.x)); ctx.fillStyle = e.hit > 0 ? '#f4c95d' : (e.tough ? '#9b3028' : '#c54438'); ctx.beginPath(); ctx.arc(0, 0, e.r, 0, Math.PI * 2); ctx.fill(); ctx.fillStyle = '#102023'; ctx.fillRect(5, -3, e.r + 7, 6); ctx.restore(); });
+        const angle = Math.atan2(mouse.y - player.y, mouse.x - player.x); ctx.save(); ctx.translate(player.x, player.y); ctx.rotate(angle); ctx.fillStyle = '#dbe5e2'; ctx.fillRect(5, -4, 22, 8); ctx.fillStyle = '#f4c95d'; ctx.beginPath(); ctx.arc(0, 0, player.radius, 0, Math.PI * 2); ctx.fill(); ctx.strokeStyle = '#071013'; ctx.lineWidth = 3; ctx.stroke(); ctx.restore();
+        particles.forEach(p => { ctx.globalAlpha = Math.max(0, p.life * 2); ctx.fillStyle = p.color; ctx.fillRect(p.x, p.y, 3, 3); }); ctx.globalAlpha = 1; ctx.restore();
+      }
+      function frame(time) { if (!lastTime) lastTime = time; accumulator += Math.min((time - lastTime) / 1000, .1); lastTime = time; while (accumulator >= STEP) { update(STEP); accumulator -= STEP; } draw(); requestAnimationFrame(frame); }
+      window.addEventListener('resize', resize); window.addEventListener('keydown', e => { keys.add(e.key.toLowerCase()); if (e.key.toLowerCase() === 'r' && state.over) reset(); }); window.addEventListener('keyup', e => keys.delete(e.key.toLowerCase())); canvas.addEventListener('mousemove', e => { const r = canvas.getBoundingClientRect(); mouse.x = e.clientX - r.left; mouse.y = e.clientY - r.top; }); canvas.addEventListener('mousedown', () => mouse.down = true); window.addEventListener('mouseup', () => mouse.down = false); startButton.addEventListener('click', reset);
+      resize(); requestAnimationFrame(frame);
+    })();
+  </script>
+</body>
+</collect.py>
+
